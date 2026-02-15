@@ -1,5 +1,6 @@
 {
   "dependencies": ["."],
+  "python_version": "3.12",
   "graphs": {
     "Orchestrator": "./main.py:main_agent",
     "ReconnaissanceAgent": "./main.py:reconnaissance",

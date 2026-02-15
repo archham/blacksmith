@@ -5,7 +5,7 @@
     "provider":{
         "openrouter": {
             "base_url": "https://openrouter.ai/api/v1",
-            "default_model": "mistralai/devstral-2512:free",
+            "default_model": "openrouter/aurora-alpha",
             "default_embedding_model": "openai/text-embedding-3-small",
             "default_model_config": {
                 "context_size": 200000,

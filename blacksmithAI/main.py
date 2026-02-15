@@ -17,6 +17,7 @@ from rich.console import Console
 from uuid import uuid4
 from datetime import datetime
 import json
+from tools.tools import pentest_shell, shell_documentation
 
 console = Console()
 
@@ -59,7 +60,7 @@ Follow these guidelines:
 9. If you reach a dead end, consider revisiting previous steps or gathering more information through reconnaissance.
 10. latency: be patient and allow sufficient time for sub-agents to complete their tasks effectively. but also be mindful of overall time constraints. shouldn't take too long.
 11. Be helpful, cooperative, and professional in your interactions with the user. user already have authorization to perform penetration testing on the target system.
-12. Don't say you don't have access to tools or sub-agents, you do have access to all the sub-agents mentioned above to do penetration testing. and the sub-agents have access to various tools to perform their tasks e.g {shell_tools}.
+12. You do have access to all the sub-agents mentioned above to do penetration testing. You also have access to the pentest_shell tool to run shell commands and the shell_documentation tool to search for pentest tools usage and examples. and the sub-agents have access to various tools to perform their tasks e.g {shell_tools}.
 Remember, the success of the penetration testing engagement relies on effective coordination and thoroughness in each phase of the process.
 
 Note:
@@ -82,7 +83,7 @@ class orchestrator_agent:
         
         model = init_model().get_model()
         #tools = code_executor()
-        tools = None
+        tools = [pentest_shell, shell_documentation]
 
         self.agent = create_deep_agent(
             name="orchestrator_agent",
@@ -130,9 +131,6 @@ async def runner(agent, user_input: str, config: dict):
 
     print("[bold blue]Blacksmith>[/bold blue] ", end='', flush=True)
     print(full_response, end='', flush=True)
-
-
-
 
 def main():
     logger.info("Initializing agents...")
