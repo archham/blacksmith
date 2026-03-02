@@ -415,7 +415,7 @@ class ChatUI:
 
     def render_chat_slim(self) -> Panel:
         """Render a slim version of the chat for live updates (no header)."""
-        # Create message panels
+        # Create message panels for all messages
         message_panels = [self.render_message(msg) for msg in self.messages]
         messages_group = Group(*message_panels) if message_panels else Text("No messages yet", style="dim")
 
@@ -441,6 +441,18 @@ class ChatUI:
         )
 
         return full_height
+
+    def render_chat_history(self) -> Group:
+        """Render all messages as static output for display after Live context exits."""
+        from rich.console import Group
+
+        message_panels = []
+        for msg in self.messages:
+            panel = self.render_message(msg)
+            message_panels.append(panel)
+            message_panels.append(Text())  # Spacing between messages
+
+        return Group(*message_panels) if message_panels else Text("No messages yet", style="dim")
 
     def save_history(self):
         """Save chat history to file."""
@@ -924,7 +936,7 @@ async def interactive_loop(orchestrator, config, ui):
             if user_input.strip() == '':
                 continue
 
-            # Record user message
+            # Record user message (displayed after response completes in history)
             ui.create_user_message(user_input)
 
             # Run the agent with streaming (using live rendering)
@@ -943,7 +955,10 @@ async def interactive_loop(orchestrator, config, ui):
                     ui.current_streaming_message.status = MessageStatus.ERROR
                     ui.current_streaming_message.status_text = "Interrupted"
                 # Continue to next prompt (don't exit)
-                continue
+
+            # Live context has exited - messages were already displayed during streaming
+            # Just add a newline for visual separation before next prompt
+            console.print("")
 
         except KeyboardInterrupt:
             # Second Ctrl+C or interrupt at input prompt
