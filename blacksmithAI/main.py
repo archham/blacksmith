@@ -12,6 +12,7 @@ from langchain.agents.middleware import ToolRetryMiddleware
 from langchain.messages import HumanMessage, AIMessage, ToolMessage
 import asyncio
 import time
+import sys
 from rich import print
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -337,7 +338,7 @@ class ChatUI:
                         cmd_display = tool.command[:50] + ("..." if len(tool.command) > 50 else "")
                         summary_display = tool.summary[:80] + ("..." if len(tool.summary) > 80 else "")
                         tool_text = Group(
-                            Text(f"{icon} ", wrap="none"),
+                            Text(f"{icon} "),
                             Text(f"{tool.tool_name}: \n    ", style="cyan"),
                             Text(cmd_display, style="cyan"),
                         )
@@ -346,7 +347,7 @@ class ChatUI:
                     else:
                         cmd_display = tool.command[:50] + ("..." if len(tool.command) > 50 else "")
                         tool_text = Group(
-                            Text(f"{icon} ", wrap="none"),
+                            Text(f"{icon} "),
                             Text(f"{tool.tool_name}: \n    ", style="cyan"),
                             Text(cmd_display, style="cyan"),
                             Text(f" [{tool.status}]", style=tool_status_style)
@@ -368,7 +369,7 @@ class ChatUI:
                     current_tool_icon = Text(STATUS_ICONS['current'], style="bold yellow")
                     current_text = Group(
                         Text(f"\n[dim]─[/dim]", style="dim"),
-                        Text(f"{current_tool_icon} ", wrap="none"),
+                        Text(f"{current_tool_icon} "),
                         Text(f"Running: ", style="yellow"),
                         Text(f"{msg.current_tool.tool_name}: ", style="cyan"),
                         Text(f"{msg.current_tool.command[:40]}...", style="yellow")
@@ -583,125 +584,139 @@ class orchestrator_agent:
 main_agent = orchestrator_agent(memory=None).get_agent()
 
 
-# Keep simple streaming that doesn't block the terminal
+# Global flag for shutdown coordination
+_shutdown_requested = False
+
+
+def request_shutdown():
+    """Signal handler for graceful shutdown."""
+    global _shutdown_requested
+    _shutdown_requested = True
+
+
+# Real-time streaming with Live render loop
 async def runner_with_live(agent, user_input: str, config: dict, ui: ChatUI):
     """
-    Runner with inline status updates - no blocking Live context.
-    Shows real-time progress but allows terminal to remain responsive.
+    Runner with real-time streaming using Rich Live context.
+    Renders on every event for true streaming feel.
+    Handles KeyboardInterrupt gracefully for clean exit.
     """
+    from rich.live import Live
+    global _shutdown_requested
+
     # Create assistant message for this turn
     current_message = ui.create_assistant_message()
     current_tool = None
 
-    async for event_type, payload in agent.astream(
-        {'messages': [HumanMessage(user_input)]},
-        config=config,
-        stream_mode=['values', 'custom', 'updates', 'messages']
-    ):
-        match event_type:
-            case 'messages':
-                # Token streaming - payload might be tuple from deepagents
-                # Handle both tuple format and direct message format
-                if isinstance(payload, tuple):
-                    # deepagents returns tuple (content_type, content)
-                    content = payload[1] if len(payload) > 1 else None
-                elif hasattr(payload, 'content'):
-                    content = payload.content
-                else:
-                    content = None
+    try:
+        with Live(ui.render_chat_slim(), refresh_per_second=8, console=console) as live:
+            async for event_type, payload in agent.astream(
+                {'messages': [HumanMessage(user_input)]},
+                config=config,
+                stream_mode=['values', 'custom', 'updates', 'messages']
+            ):
+                match event_type:
+                    case 'messages':
+                        # Token streaming - append only actual deltas
+                        if hasattr(payload, 'content') and payload.content:
+                            ui.append_token(current_message, payload.content)
 
-                if content is not None and isinstance(content, str):
-                    ui.append_token(current_message, content)
+                    case 'custom':
+                        # Tool status updates from get_stream_writer()
+                        ui.update_status(current_message, payload)
 
-            case 'custom':
-                # Tool status updates from get_stream_writer()
-                ui.update_status(current_message, payload)
-
-                # Parse tool events for tool call tracking
-                if isinstance(payload, str):
-                    if 'running command' in payload.lower():
-                        cmd = payload.split('running command ', 1)[1] if 'running command ' in payload else 'unknown'
-                        existing_running = any(
-                            t.status == 'running' and t.tool_name == 'pentest_shell'
-                            for t in current_message.tool_calls
-                        )
-                        if not existing_running:
-                            current_tool = current_message.add_tool_call('pentest_shell', cmd)
-                            ui.active_tools[current_tool.id] = current_tool
-
-                    elif 'command executed' in payload.lower() or 'failed' in payload.lower():
-                        if current_tool:
-                            if 'failed' in payload.lower():
-                                current_message.fail_tool(payload)
-                            else:
-                                current_message.complete_tool(summary=payload, output="")
-                            if current_tool.id in ui.active_tools:
-                                del ui.active_tools[current_tool.id]
-                            current_tool = None
-
-            case 'updates':
-                # Agent delegation events
-                for node_name, node_data in payload.items():
-                    if any(agent_name in str(node_name).lower() for agent_name in
-                           ['recon', 'exploit', 'scan', 'vuln', 'post', 'pentest']):
-                        ui.update_status(current_message, f"Delegating to {node_name}...")
-
-            case 'values':
-                # Final state update - capture tool outputs from final message
-                if 'messages' in payload and payload['messages']:
-                    final_msg = payload['messages'][-1]
-
-                    # Update status to complete
-                    ui.finalize_message(current_message, final_msg.content)
-
-                    # Process tool_calls from final message
-                    # These are typically 'task' tool calls (delegating to sub-agents)
-                    if hasattr(final_msg, 'tool_calls') and final_msg.tool_calls:
-                        for final_tool_call in final_msg.tool_calls:
-                            # Extract tool name and args from the tool_call dict
-                            tool_name = final_tool_call.get('name', 'unknown')
-                            args = final_tool_call.get('args', {})
-
-                            # Create a tool call entry for delegation
-                            # For 'task' tool calls, this is delegation to sub-agents
-                            if tool_name == 'task':
-                                desc = args.get('description', 'Task execution')[:60]
-                                subagent = args.get('subagent_type', 'unknown')
-
-                                # Check if we already have a matching tool call by command
-                                existing = any(
-                                    t.command == desc
+                        # Parse tool events for tool call tracking
+                        if isinstance(payload, str):
+                            if 'running command' in payload.lower():
+                                cmd = payload.split('running command ', 1)[1] if 'running command ' in payload else 'unknown'
+                                existing_running = any(
+                                    t.status == 'running' and t.tool_name == 'pentest_shell'
                                     for t in current_message.tool_calls
                                 )
+                                if not existing_running:
+                                    current_tool = current_message.add_tool_call('pentest_shell', cmd)
+                                    ui.active_tools[current_tool.id] = current_tool
 
-                                if not existing:
-                                    # Create delegation entry
-                                    tool_call_obj = ToolCall(
-                                        id=final_tool_call.get('id', 'tool_unk'),
-                                        tool_name=tool_name,
-                                        command=f"Delegating to {subagent}: {desc}",
-                                        status='completed',
-                                        start_time=datetime.now(),
-                                        summary=f"Delegated to {subagent}"
-                                    )
-                                    current_message.tool_calls.append(tool_call_obj)
-                            elif tool_name == 'pentest_shell':
-                                # Actual shell tool execution
-                                cmd = args.get('command', 'unknown')
-                                existing = any(
-                                    t.command == cmd
-                                    for t in current_message.tool_calls
-                                )
-                                if not existing:
-                                    tool_call_obj = ToolCall(
-                                        id=final_tool_call.get('id', 'tool_unk'),
-                                        tool_name=tool_name,
-                                        command=cmd,
-                                        status=final_tool_call.get('status', 'completed'),
-                                        start_time=datetime.now(),
-                                        summary=args.get('output', '')[:80]
-                                    )
-                                    current_message.tool_calls.append(tool_call_obj)
+                            elif 'command executed' in payload.lower() or 'failed' in payload.lower():
+                                if current_tool:
+                                    if 'failed' in payload.lower():
+                                        current_message.fail_tool(payload)
+                                    else:
+                                        current_message.complete_tool(summary=payload, output="")
+                                    if current_tool.id in ui.active_tools:
+                                        del ui.active_tools[current_tool.id]
+                                    current_tool = None
+
+                    case 'updates':
+                        # Agent delegation events
+                        for node_name, node_data in payload.items():
+                            if any(agent_name in str(node_name).lower() for agent_name in
+                                   ['recon', 'exploit', 'scan', 'vuln', 'post', 'pentest']):
+                                ui.update_status(current_message, f"Delegating to {node_name}...")
+
+                    case 'values':
+                        # Final state update - capture tool outputs from final message
+                        if 'messages' in payload and payload['messages']:
+                            # Find the AI message - looking for AIMessage type
+                            assistant_msg = None
+                            for msg in reversed(payload['messages']):
+                                if type(msg).__name__ == 'AIMessage':
+                                    assistant_msg = msg
+                                    break
+
+                            if assistant_msg:
+                                # Update status to complete
+                                ui.finalize_message(current_message, assistant_msg.content)
+
+                                # Process tool_calls from final message
+                                # These are typically 'task' tool calls (delegating to sub-agents)
+                                if hasattr(assistant_msg, 'tool_calls') and assistant_msg.tool_calls:
+                                    for final_tool_call in assistant_msg.tool_calls:
+                                        # Extract tool name and args from the tool_call dict
+                                        tool_name = final_tool_call.get('name', 'unknown')
+                                        args = final_tool_call.get('args', {})
+
+                                        # Create a tool call entry for delegation
+                                        # For 'task' tool calls, this is delegation to sub-agents
+                                        if tool_name == 'task':
+                                            desc = args.get('description', 'Task execution')[:60]
+                                            subagent = args.get('subagent_type', 'unknown')
+
+                                            # Check if we already have a matching tool call by command
+                                            existing = any(
+                                                t.command == desc
+                                                for t in current_message.tool_calls
+                                            )
+
+                                            if not existing:
+                                                # Create delegation entry
+                                                tool_call_obj = ToolCall(
+                                                    id=final_tool_call.get('id', 'tool_unk'),
+                                                    tool_name=tool_name,
+                                                    command=f"Delegating to {subagent}: {desc}",
+                                                    status='completed',
+                                                    start_time=datetime.now(),
+                                                    summary=f"Delegated to {subagent}"
+                                                )
+                                                current_message.tool_calls.append(tool_call_obj)
+
+                # Check for shutdown request during streaming
+                if _shutdown_requested:
+                    ui.update_status(current_message, "Interrupted by user")
+                    break
+
+                # THIS IS THE KEY: re-render on every event for real-time updates
+                live.update(ui.render_chat_slim())
+
+    except asyncio.CancelledError:
+        # Handle graceful cancellation
+        ui.update_status(current_message, "Cancelled")
+        raise
+    except KeyboardInterrupt:
+        # Handle Ctrl+C during streaming
+        ui.update_status(current_message, "Interrupted by user")
+        ui.finalize_message(current_message, current_message.content + "\n\n[Interrupted by user]")
+        raise
 
 
 async def runner(agent, user_input: str, config: dict, ui: ChatUI, live_render=False):
@@ -872,11 +887,22 @@ def parse_slash_command(cmd: str, ui: ChatUI) -> Optional[bool]:
 
 async def interactive_loop(orchestrator, config, ui):
     """Main interactive loop for the enhanced terminal."""
-    user_input = ""
+    import signal
+    global _shutdown_requested
+
+    # Set up signal handler for graceful shutdown
+    def signal_handler(sig, frame):
+        request_shutdown()
+        console.print("\n[bold yellow]Interrupted. Press Ctrl+C again to force quit.[/bold yellow]")
+
+    signal.signal(signal.SIGINT, signal_handler)
 
     # Main interaction loop
     while True:
         try:
+            # Reset shutdown flag at start of each iteration
+            _shutdown_requested = False
+
             # Get user input (blocking input in async context)
             user_input = str(console.input("\n[bold green]?[/bold green] "))
 
@@ -890,9 +916,8 @@ async def interactive_loop(orchestrator, config, ui):
 
             # Handle special text commands for backward compatibility
             if user_input.lower() == 'exit' or user_input.lower() == 'quit':
-                print("\n[bold red]Shutting down...[/bold red]")
+                console.print("\n[bold red]Shutting down...[/bold red]")
                 ui.save_history()
-                time.sleep(0.5)
                 break
 
             # Handle empty input
@@ -904,33 +929,36 @@ async def interactive_loop(orchestrator, config, ui):
 
             # Run the agent with streaming (using live rendering)
             try:
-                await asyncio.wait_for(
-                    runner_with_live(orchestrator, user_input, config, ui),
-                    timeout=600  # 10 minute timeout
-                )
-
-                # Render final state after completion - full message with tools
-                final_message = ui.messages[-1]
-                if final_message.role == "assistant":
-                    panel = ui.render_message(final_message)
-                    console.print()
-                    console.print(panel)
-                    console.print()
+                await runner_with_live(orchestrator, user_input, config, ui)
 
             except asyncio.TimeoutError:
-                print("\n[bold red]Request timed out after 10 minutes[/bold red]")
+                console.print("\n[bold red]Request timed out after 10 minutes[/bold red]")
                 if ui.current_streaming_message:
                     ui.current_streaming_message.status = MessageStatus.ERROR
                     ui.current_streaming_message.status_text = "Timed out"
+            except KeyboardInterrupt:
+                # User interrupted during agent streaming
+                console.print("\n[bold yellow]Operation cancelled.[/bold yellow]")
+                if ui.current_streaming_message:
+                    ui.current_streaming_message.status = MessageStatus.ERROR
+                    ui.current_streaming_message.status_text = "Interrupted"
+                # Continue to next prompt (don't exit)
+                continue
 
         except KeyboardInterrupt:
-            print("\n[bold red]Interrupted. Exiting...[/bold red]")
+            # Second Ctrl+C or interrupt at input prompt
+            console.print("\n[bold red]Exiting...[/bold red]")
             ui.save_history()
-            time.sleep(0.5)
+            break
+        except EOFError:
+            # Handle Ctrl+D
+            console.print("\n[bold red]Exiting...[/bold red]")
+            ui.save_history()
             break
         except Exception as e:
             logger.error(f"Error in main loop: {e}")
-            print(f"\n[bold red]Error: {e}[/bold red]")
+            console.print(f"\n[bold red]Error: {e}[/bold red]")
+            # Continue loop on error rather than crashing
 
 
 async def main():
@@ -957,4 +985,13 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Final safety net for Ctrl+C
+        console.print("\n[bold red]Goodbye![/bold red]")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        console.print(f"\n[bold red]Fatal error: {e}[/bold red]")
+        sys.exit(1)
