@@ -288,13 +288,13 @@ vllm serve mistralai/Devstral-2-123B-Instruct-2512 \
 
 ```bash
 git clone https://github.com/yohannesgk/blacksmith.git
-cd blacksmithAI/blacksmithAI
 ```
 
 ### Step 2: Install Python Dependencies
 
 ```bash
 # Install dependencies using uv
+cd blacksmithAI/blacksmithAI
 uv sync
 ```
 
@@ -337,7 +337,7 @@ This command performs:
 
 ### Initial Configuration
 
-After running `make setup`, configure your environment:
+After setup or installation, configure your environment:
 
 ```bash
 # 1. Copy example environment file
@@ -355,7 +355,11 @@ nano blacksmithAI/config.json
 #### CLI Mode
 
 ```bash
-make start-cli
+make start-cli 
+
+or 
+
+uv run main.py
 ```
 
 This command:
@@ -375,6 +379,10 @@ cd frontend && pnpm build && pnpm start
 
 # Terminal 3: Start LangGraph dev server
 cd blacksmithAI && uv run langgraph dev
+
+or
+
+cd blacksmithAI && uv run langgraph up
 ```
 
 Then access: **http://localhost:3000**
@@ -472,7 +480,7 @@ Edit `blacksmithAI/config.json` to configure LLM providers and models.
 ```json
 {
   "defaults": {
-    "provider": "openrouter",  // or "vllm", or custom
+    "provider": "openrouter",  // or "vllm", or custom(openai)
   },
   "providers": {
     "openrouter": {
