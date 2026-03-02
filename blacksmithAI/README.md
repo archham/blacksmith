@@ -274,7 +274,7 @@ uv run hf auth login #if not logged in
 ### Serve
 
 ```bash
-vllm serve mistralai/Devstral-2-123B-Instruct-2512 \
+vllm serve `[model name]` \
   --host 0.0.0.0 \
   --port 8000 \
   --max-model-len 8192 \
@@ -625,7 +625,7 @@ Access the UI at: **http://localhost:3000**
 A hosted version is available for quick testing without local setup.
 
 ```
-URL: [coming soon]
+URL: https://blacksmithai.kahanlabs.com/
 ```
 
 ---
@@ -917,9 +917,3 @@ You may choose which license to comply with when you use the code.
 - **Documentation**: Check our Wiki for additional resources
 
 ---
-
-<div align="center">
-
-**Built with ❤️ for the security community**
-
-</div>

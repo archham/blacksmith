@@ -1,10 +1,3 @@
-"""
-BlacksmithAI - Advanced Interactive Terminal
-
-An AI-powered penetration testing framework with real-time streaming,
-loading animations, and chat-style interface.
-"""
-
 from agents.recon import ReconAgent
 from agents.exploit import ExploitAgent
 from agents.post_exploit import PostExploitAgent
@@ -345,17 +338,17 @@ class ChatUI:
                         summary_display = tool.summary[:80] + ("..." if len(tool.summary) > 80 else "")
                         tool_text = Group(
                             Text(f"{icon} ", wrap="none"),
-                            Text(f"{tool.tool_name}: ", style="cyan"),
-                            Text(cmd_display),
+                            Text(f"{tool.tool_name}: \n    ", style="cyan"),
+                            Text(cmd_display, style="cyan"),
                         )
                         if summary_display:
-                            tool_text = Group(tool_text, Text(f"  {icon_text}Summary: {summary_display}", style=tool_status_style))
+                            tool_text = Group(tool_text, Text(f"    {icon_text} {summary_display}", style=tool_status_style))
                     else:
                         cmd_display = tool.command[:50] + ("..." if len(tool.command) > 50 else "")
                         tool_text = Group(
                             Text(f"{icon} ", wrap="none"),
-                            Text(f"{tool.tool_name}: ", style="cyan"),
-                            Text(cmd_display),
+                            Text(f"{tool.tool_name}: \n    ", style="cyan"),
+                            Text(cmd_display, style="cyan"),
                             Text(f" [{tool.status}]", style=tool_status_style)
                         )
 
@@ -364,8 +357,8 @@ class ChatUI:
                 if tool_sections:
                     content = Group(
                         content,
-                        Text("\n[dim]─[/dim]"),
-                        *[Text("\n", style="dim")] + tool_sections
+                        Text(),
+                        *tool_sections
                     )
 
             # Add status indicator for streaming messages
@@ -590,71 +583,125 @@ class orchestrator_agent:
 main_agent = orchestrator_agent(memory=None).get_agent()
 
 
+# Keep simple streaming that doesn't block the terminal
 async def runner_with_live(agent, user_input: str, config: dict, ui: ChatUI):
     """
-    Runner with live Rich rendering for real-time chat updates.
-    Uses Rich's Live context to continuously update the display.
+    Runner with inline status updates - no blocking Live context.
+    Shows real-time progress but allows terminal to remain responsive.
     """
-    from rich.live import Live
-    from rich.text import Text
-
     # Create assistant message for this turn
     current_message = ui.create_assistant_message()
     current_tool = None
 
-    # Create live rendering context
-    with Live(ui.render_chat_slim(), console=console, refresh_per_second=10, screen=False) as live:
-        async for event_type, payload in agent.astream(
-            {'messages': [HumanMessage(user_input)]},
-            config=config,
-            stream_mode=['values', 'custom', 'updates', 'messages']
-        ):
-            match event_type:
-                case 'messages':
-                    # Token streaming - append to message content
-                    if hasattr(payload, 'content'):
-                        ui.append_token(current_message, payload.content)
-                        live.update(ui.render_chat_slim())
+    async for event_type, payload in agent.astream(
+        {'messages': [HumanMessage(user_input)]},
+        config=config,
+        stream_mode=['values', 'custom', 'updates', 'messages']
+    ):
+        match event_type:
+            case 'messages':
+                # Token streaming - payload might be tuple from deepagents
+                # Handle both tuple format and direct message format
+                if isinstance(payload, tuple):
+                    # deepagents returns tuple (content_type, content)
+                    content = payload[1] if len(payload) > 1 else None
+                elif hasattr(payload, 'content'):
+                    content = payload.content
+                else:
+                    content = None
 
-                case 'custom':
-                    # Tool status updates from get_stream_writer()
-                    ui.update_status(current_message, payload)
+                if content is not None and isinstance(content, str):
+                    ui.append_token(current_message, content)
 
-                    # Parse tool events for tool call tracking
-                    if isinstance(payload, str):
-                        if 'running command' in payload.lower():
-                            cmd = payload.split('running command ', 1)[1] if 'running command ' in payload else 'unknown'
-                            existing_running = any(
-                                t.status == 'running' and t.tool_name == 'pentest_shell'
-                                for t in current_message.tool_calls
-                            )
-                            if not existing_running:
-                                current_tool = current_message.add_tool_call('pentest_shell', cmd)
-                                ui.active_tools[current_tool.id] = current_tool
+            case 'custom':
+                # Tool status updates from get_stream_writer()
+                ui.update_status(current_message, payload)
 
-                        elif 'command executed' in payload.lower() or 'failed' in payload.lower():
-                            if current_tool:
-                                if 'failed' in payload.lower():
-                                    current_message.fail_tool(payload)
-                                else:
-                                    current_message.complete_tool(summary=payload, output="")
-                                if current_tool.id in ui.active_tools:
-                                    del ui.active_tools[current_tool.id]
-                                current_tool = None
+                # Parse tool events for tool call tracking
+                if isinstance(payload, str):
+                    if 'running command' in payload.lower():
+                        cmd = payload.split('running command ', 1)[1] if 'running command ' in payload else 'unknown'
+                        existing_running = any(
+                            t.status == 'running' and t.tool_name == 'pentest_shell'
+                            for t in current_message.tool_calls
+                        )
+                        if not existing_running:
+                            current_tool = current_message.add_tool_call('pentest_shell', cmd)
+                            ui.active_tools[current_tool.id] = current_tool
 
-                case 'updates':
-                    # Agent delegation events
-                    for node_name, node_data in payload.items():
-                        if any(agent_name in str(node_name).lower() for agent_name in
-                               ['recon', 'exploit', 'scan', 'vuln', 'post', 'pentest']):
-                            ui.update_status(current_message, f"Delegating to {node_name}...")
+                    elif 'command executed' in payload.lower() or 'failed' in payload.lower():
+                        if current_tool:
+                            if 'failed' in payload.lower():
+                                current_message.fail_tool(payload)
+                            else:
+                                current_message.complete_tool(summary=payload, output="")
+                            if current_tool.id in ui.active_tools:
+                                del ui.active_tools[current_tool.id]
+                            current_tool = None
 
-                case 'values':
-                    # Final state update
-                    if 'messages' in payload and payload['messages']:
-                        final_content = payload['messages'][-1].content
-                        ui.finalize_message(current_message, final_content)
-                        live.update(ui.render_chat_slim())
+            case 'updates':
+                # Agent delegation events
+                for node_name, node_data in payload.items():
+                    if any(agent_name in str(node_name).lower() for agent_name in
+                           ['recon', 'exploit', 'scan', 'vuln', 'post', 'pentest']):
+                        ui.update_status(current_message, f"Delegating to {node_name}...")
+
+            case 'values':
+                # Final state update - capture tool outputs from final message
+                if 'messages' in payload and payload['messages']:
+                    final_msg = payload['messages'][-1]
+
+                    # Update status to complete
+                    ui.finalize_message(current_message, final_msg.content)
+
+                    # Process tool_calls from final message
+                    # These are typically 'task' tool calls (delegating to sub-agents)
+                    if hasattr(final_msg, 'tool_calls') and final_msg.tool_calls:
+                        for final_tool_call in final_msg.tool_calls:
+                            # Extract tool name and args from the tool_call dict
+                            tool_name = final_tool_call.get('name', 'unknown')
+                            args = final_tool_call.get('args', {})
+
+                            # Create a tool call entry for delegation
+                            # For 'task' tool calls, this is delegation to sub-agents
+                            if tool_name == 'task':
+                                desc = args.get('description', 'Task execution')[:60]
+                                subagent = args.get('subagent_type', 'unknown')
+
+                                # Check if we already have a matching tool call by command
+                                existing = any(
+                                    t.command == desc
+                                    for t in current_message.tool_calls
+                                )
+
+                                if not existing:
+                                    # Create delegation entry
+                                    tool_call_obj = ToolCall(
+                                        id=final_tool_call.get('id', 'tool_unk'),
+                                        tool_name=tool_name,
+                                        command=f"Delegating to {subagent}: {desc}",
+                                        status='completed',
+                                        start_time=datetime.now(),
+                                        summary=f"Delegated to {subagent}"
+                                    )
+                                    current_message.tool_calls.append(tool_call_obj)
+                            elif tool_name == 'pentest_shell':
+                                # Actual shell tool execution
+                                cmd = args.get('command', 'unknown')
+                                existing = any(
+                                    t.command == cmd
+                                    for t in current_message.tool_calls
+                                )
+                                if not existing:
+                                    tool_call_obj = ToolCall(
+                                        id=final_tool_call.get('id', 'tool_unk'),
+                                        tool_name=tool_name,
+                                        command=cmd,
+                                        status=final_tool_call.get('status', 'completed'),
+                                        start_time=datetime.now(),
+                                        summary=args.get('output', '')[:80]
+                                    )
+                                    current_message.tool_calls.append(tool_call_obj)
 
 
 async def runner(agent, user_input: str, config: dict, ui: ChatUI, live_render=False):
@@ -741,22 +788,86 @@ async def runner(agent, user_input: str, config: dict, ui: ChatUI, live_render=F
 async def display_welcome():
     """Display welcome banner and instructions."""
     welcome_text = """
-[bold red]╔══════════════════════════════════════════════════════════════════════════╗[/bold red]
-[bold red]║                         Welcome to BlacksmithAI                          ║[/bold red]
-[bold red]║              AI-Powered Penetration Testing Framework                    ║[/bold red]
-[bold red]╚══════════════════════════════════════════════════════════════════════════╝[/bold red]
+  ╔═══════════════════════════════════════════════════════════╗
+  ║        Welcome to BlacksmithAI - AI Penetration Testing   ║
+  ╚═══════════════════════════════════════════════════════════╝
 
-[dim]Type your commands below. Examples:[/dim]
-  • [green]scan[/green] target.com for open ports
-  • [green]run[/green] reconnaissance on 192.168.1.1
-  • [green]perform[/green] a full penetration test on example.com
-  • Type [yellow]history[/yellow] to show past conversations
-  • Type [yellow]clear[/yellow] to clear the screen
-  • Type [yellow]exit[/yellow] or press Ctrl+C to quit
-
-[dim]Commands are executed in isolated containers. Press Ctrl+C to cancel.[/dim]
+  Type your penetration testing command. Examples:
+    • [green]scan[/green] scanme.nmap.org for open ports
+    • [green]run[/green] recon on 192.168.1.1
+    • [green]test[/green] vulnerability on example.com
+    • [yellow]history[/yellow] - Show past conversations
+    • [yellow]clear[/yellow] - Clear screen
+    • [yellow]exit[/yellow] or Ctrl+C - Quit
 """
     print(welcome_text)
+
+
+def parse_slash_command(cmd: str, ui: ChatUI) -> Optional[bool]:
+    """
+    Parse slash commands. Returns True if handled (shouldn't send to agent),
+    False if regular command, None to exit.
+    """
+    cmd_lower = cmd.lower()
+
+    match cmd_lower:
+        case '/clear':
+            console.clear()
+            console.print(Panel(
+                Text("BlacksmithAI - AI-Powered Penetration Testing", justify="center", style="bold red"),
+                border_style="red",
+                padding=(1, 2)
+            ))
+            console.print(Text("Ready", style="dim cyan"))
+            return True
+
+        case '/history':
+            history = ui.load_history(limit=20)
+            if history:
+                console.print("\n[bold]Recent conversations:[/bold]")
+                for i, record in enumerate(history, 1):
+                    preview = record['content'][:60] + ("..." if len(record['content']) > 60 else "")
+                    console.print(f"  [dim]{i}.[/dim] {preview}")
+            else:
+                console.print("\n[dim]No history available[/dim]")
+            return True
+
+        case '/help':
+            help_text = """
+[bold]BlacksmithAI Commands:[/bold]
+  /clear      - Clear screen
+  /history    - Show conversation history
+  /help       - Show this help message
+  /status     - Show current status
+  /exit       - Quit the application
+
+[bold]Examples:[/bold]
+  scan scanme.nmap.org for open ports
+  run recon on 192.168.1.1
+  test vulnerability on example.com
+"""
+            console.print(Panel(help_text, title="[bold yellow]Commands[/bold yellow]", border_style="yellow"))
+            return True
+
+        case '/status':
+            elapsed = ui.get_elapsed_time() if ui.operation_start_time else "0s"
+            activity = ui.get_status_phrase() if ui._current_activity != 'idle' else "Idle"
+            active_tools = len(ui.active_tools)
+
+            status_text = f"\n[bold cyan]Current Status:[/bold cyan]\n"
+            status_text += f"  • Activity: {activity}\n"
+            status_text += f"  • Active Tools: {active_tools}\n"
+            status_text += f"  • Session Duration: {elapsed}\n"
+
+            console.print(Panel(status_text, title="[bold cyan]Status[/bold cyan]", border_style="cyan"))
+            return True
+
+        case '/exit' | '/quit':
+            console.print("[bold red]Shutting down...[/bold red]")
+            ui.save_history()
+            return None  # Signal to exit
+
+    return False  # Send to agent
 
 
 async def interactive_loop(orchestrator, config, ui):
@@ -769,29 +880,23 @@ async def interactive_loop(orchestrator, config, ui):
             # Get user input (blocking input in async context)
             user_input = str(console.input("\n[bold green]?[/bold green] "))
 
-            # Handle special commands
+            # Handle slash commands FIRST
+            if user_input.startswith('/'):
+                result = parse_slash_command(user_input, ui)
+                if result is None:  # Exit signal
+                    break
+                elif result:  # Handled - continue to next iteration
+                    continue
+
+            # Handle special text commands for backward compatibility
             if user_input.lower() == 'exit' or user_input.lower() == 'quit':
                 print("\n[bold red]Shutting down...[/bold red]")
                 ui.save_history()
                 time.sleep(0.5)
                 break
 
-            elif user_input.lower() == 'clear':
-                console.clear()
-                await display_welcome()
-                continue
-
-            elif user_input.lower() == 'history':
-                history = ui.load_history(limit=20)
-                if history:
-                    print("\n[bold]Recent conversations:[/bold]")
-                    for i, record in enumerate(history, 1):
-                        print(f"  {i}. [{record['role']}] {record['content'][:60]}...")
-                else:
-                    print("\n[dim]No history available[/dim]")
-                continue
-
-            elif user_input.strip() == '':
+            # Handle empty input
+            if user_input.strip() == '':
                 continue
 
             # Record user message
@@ -804,22 +909,13 @@ async def interactive_loop(orchestrator, config, ui):
                     timeout=600  # 10 minute timeout
                 )
 
-                # Render final state summary after completion
+                # Render final state after completion - full message with tools
                 final_message = ui.messages[-1]
                 if final_message.role == "assistant":
-                    print(f"\n[dim]├──────────────────────────────────────────────────────────┤[/dim]")
-                    print(f" [bold blue]Blacksmith>[/bold blue] {final_message.content[:500]}{'...' if len(final_message.content) > 500 else ''}")
-                    print(f" [dim]└──────────────────────────────────────────────────────────┤[/dim]")
-
-                    # Show tool summary
-                    if final_message.tool_calls:
-                        print(f"\n[dim cyan]  ✓ Tools used: {len(final_message.tool_calls)}[/dim cyan]")
-                        for tool in final_message.tool_calls:
-                            icon = "" if tool.status == "completed" else ""
-                            tool_preview = tool.command[:35] + ("..." if len(tool.command) > 35 else "")
-                            print(f"    {icon} {tool.tool_name}: {tool_preview}")
-                            if tool.summary and tool.status == "completed":
-                                print(f"    └─ Summary: {tool.summary[:70]}{'...' if len(tool.summary) > 70 else ''}")
+                    panel = ui.render_message(final_message)
+                    console.print()
+                    console.print(panel)
+                    console.print()
 
             except asyncio.TimeoutError:
                 print("\n[bold red]Request timed out after 10 minutes[/bold red]")
