@@ -911,10 +911,10 @@ For commercial use under different terms (for example, closed‑source distribut
 
 You may choose which license to comply with when you use the code.
 
-[Contact me]📧(mailto:jochr2023@gmail.com)
+[Contact me]📧(mailto:yohannesgk@kahanlabs.com)
 
 ### Support
 
 - **Issues**: Report bugs and feature requests on GitHub
-- **Discussions**: Join our community discussions [discord](https://discord.gg/HJwAX5rB)
+- **Discussions**: Join our community discussions [discord](https://discord.gg/y9Rfag3cVk)
 - **Documentation**: Check our Wiki for additional resources
