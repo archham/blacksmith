@@ -5,7 +5,7 @@
     "provider":{
         "openrouter": {
             "base_url": "https://openrouter.ai/api/v1",
-            "default_model": "openrouter/aurora-alpha",
+            "default_model": "openrouter/hunter-alpha",
             "default_embedding_model": "openai/text-embedding-3-small",
             "default_model_config": {
                 "context_size": 200000,
@@ -49,13 +49,13 @@
             "sqlmap", "hydra", "medusa", "ncrack"
         ],
         "post_exploitation": [
-            "netcat-traditional", "socat", "hping3",
+            "netcat-traditional", "socat",
             "impacket CLIs (psexec, smbclient, secretsdump)"
         ],
         "general": [
             "python3", "pip3", "Go toolchain (go install tools)", 
             "build-essential", "gcc", "gdb", "strace",
-            "flask", "httpie", "curl", "openssh-client"
+            "flask", "httpie", "curl", "openssh-client", "hping3"
         ]
     }
 }
