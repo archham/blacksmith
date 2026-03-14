@@ -16,38 +16,20 @@ sleep = 2
 
 
 @tool
-def pentest_shell(command: str, timeout: int = 300):
-    """
-    This tool run a shell commands for pentesting.
-    As of now these tools are available besides basic linux commands:
+def pentest_shell(command: str, timeout: int = 300) -> dict:
+    """Run a shell command for penetration testing in an isolated container.
 
-        "reconnaissance": [
-            "whois", "dnsutils (dig/nslookup)", "dnsrecon",
-            "assetfinder", "findomain", "subfinder"
-        ],
-        "scanning_enumeration": [
-            "nmap", "masscan", "enum4linux-ng",
-            "gobuster", "wpscan", "fingerprintx"
-        ],
-        "vulnerability_mapping": [
-            "nuclei", "sslscan"
-        ],
-        "exploitation": [
-            "sqlmap", "hydra", "medusa", "ncrack"
-        ],
-        "post_exploitation": [
-            "netcat-traditional", "socat", "hping3",
-            "impacket CLIs (psexec, smbclient, secretsdump)"
-        ],
-        "general": [
-            "python3", "pip3", "Go toolchain (go install tools)", 
-            "build-essential", "gcc", "gdb", "strace",
-            "flask", "httpie", "curl", "openssh-client"
-        ]
-    
+    Available tool categories:
+    - reconnaissance: whois, dig, dnsrecon, assetfinder, subfinder
+    - scanning_enumeration: nmap, masscan, enum4linux-ng, gobuster, wpscan
+    - vulnerability_mapping: nuclei, sslscan
+    - exploitation: sqlmap, hydra, medusa, ncrack
+    - post_exploitation: netcat, socat, hping3, impacket CLIs
+    - general: python3, curl, httpie, openssh-client
+
     Args:
-        command: bash command e.g nmap -sV -p 80,21 10.10.1.173
-        timeout: command execution timeout in seconds (default: 300 seconds)
+        command: bash command to execute, e.g. "nmap -sV -p 80,21 10.10.1.173"
+        timeout: command execution timeout in seconds (default: 300)
     """
 
     # initialize custom stream writer
@@ -78,14 +60,11 @@ shell_documentation_vector_store = storage_manager(
 
 # tool for shell command documentation
 @tool
-def shell_documentation(query: str):
-    """
-    This tools provides documentation for the pentest shell commands available in the pentest shell tool.
+def shell_documentation(query: str) -> str:
+    """Search documentation for pentest shell commands available in the pentest shell tool.
 
     Args:
-        query: The documentation query string.
-    Returns:
-        A string containing relevant documentation snippets related to the query.
+        query: The documentation query string to search for.
     """
     # initialize custom stream writer
     writer = get_stream_writer()
