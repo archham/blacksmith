@@ -1,26 +1,30 @@
-FROM langchain/langgraph-api:3.12
+FROM python:3.12-slim
 
+WORKDIR /app
 
+# Install system dependencies (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# -- Adding local package . --
-ADD . /deps/blacksmithAI
-# -- End of local package . --
+# Copy dependency files first (better layer caching)
+COPY pyproject.toml ./
 
-# -- Installing all local dependencies --
-RUN for dep in /deps/*; do             echo "Installing $dep";             if [ -d "$dep" ]; then                 echo "Installing $dep";                 (cd "$dep" && PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir -c /api/constraints.txt -e .);             fi;         done
-# -- End of local dependencies install --
-ENV LANGSERVE_GRAPHS='{"Orchestrator": "/deps/blacksmithAI/main.py:main_agent", "ReconnaissanceAgent": "/deps/blacksmithAI/main.py:reconnaissance", "vulnurabilityMappingAgent": "/deps/blacksmithAI/main.py:vulnurability_mapping", "PostExploitAgent": "/deps/blacksmithAI/main.py:post_exploit", "ScannerEnumeratorAgent": "/deps/blacksmithAI/main.py:scan_enum", "ExploitAgent": "/deps/blacksmithAI/main.py:exploit"}'
+# Install Python dependencies with optimized settings
+RUN pip install --no-cache-dir --compile uv \
+    && uv pip install --system --no-cache-dir -e .
 
+# Copy application code
+COPY . .
 
+# Set production environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=random \
+    LANGCHAIN_TRACING_V2=false \
+    OTEL_SDK_DISABLED=true
 
-# -- Ensure user deps didn't inadvertently overwrite langgraph-api
-RUN mkdir -p /api/langgraph_api /api/langgraph_runtime /api/langgraph_license && touch /api/langgraph_api/__init__.py /api/langgraph_runtime/__init__.py /api/langgraph_license/__init__.py
-RUN PYTHONDONTWRITEBYTECODE=1 uv pip install --system --no-cache-dir --no-deps -e /api
-# -- End of ensuring user deps didn't inadvertently overwrite langgraph-api --
-# -- Removing build deps from the final image ~<:===~~~ --
-RUN pip uninstall -y pip setuptools wheel
-RUN rm -rf /usr/local/lib/python*/site-packages/pip* /usr/local/lib/python*/site-packages/setuptools* /usr/local/lib/python*/site-packages/wheel* && find /usr/local/bin -name "pip*" -delete || true
-RUN rm -rf /usr/lib/python*/site-packages/pip* /usr/lib/python*/site-packages/setuptools* /usr/lib/python*/site-packages/wheel* && find /usr/bin -name "pip*" -delete || true
-RUN uv pip uninstall --system pip setuptools wheel && rm /usr/bin/uv /usr/bin/uvx
+EXPOSE 8000
 
-WORKDIR /deps/blacksmithAI
+# Use production Uvicorn with optimized workers
+CMD ["uvicorn", "main:create_app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "10", "--backlog", "20", "--timeout-keep-alive", "5"]
